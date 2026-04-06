@@ -288,3 +288,78 @@ header h1 {
 .results-table th:nth-child(1) { width: 40%; }
 .results-table th:nth-child(2) { width: 25%; }
 .results-table th:nth-child(3) { width: 35%; }
+
+/* ===========================================
+   ПРЕДУПРЕЖДЕНИЕ О ЛИЦЕНЗИЯХ
+   =========================================== */
+.license-warning {
+    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+    border-left: 5px solid #f39c12;
+    border-radius: 8px;
+    padding: 20px 25px;
+    margin-bottom: 20px;
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    box-shadow: 0 2px 8px rgba(243, 156, 18, 0.2);
+}
+
+.license-warning .warning-icon {
+    font-size: 40px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.license-warning .warning-content {
+    flex: 1;
+}
+
+.license-warning strong {
+    color: #d35400;
+    font-size: 16px;
+    display: block;
+    margin-bottom: 10px;
+}
+
+.license-warning p {
+    color: #2c3e50;
+    font-size: 14px;
+    line-height: 1.6;
+    margin: 8px 0;
+}
+
+.license-warning .warning-actions {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid rgba(243, 156, 18, 0.3);
+}
+
+.license-warning ul {
+    margin: 10px 0 0 20px;
+    padding: 0;
+}
+
+.license-warning li {
+    color: #2c3e50;
+    font-size: 14px;
+    line-height: 1.8;
+    margin: 5px 0;
+}
+
+/* Адаптив для мобильных */
+@media (max-width: 768px) {
+    .license-warning {
+        flex-direction: column;
+        padding: 15px;
+    }
+    
+    .license-warning .warning-icon {
+        font-size: 30px;
+        text-align: center;
+        width: 100%;
+    }
+    
+    .license-warning .warning-content {
+        width: 100%;
+    }
+}
