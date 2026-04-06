@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
 </head>
 <body>
     <div class="container">
@@ -29,26 +30,73 @@
 
             <div id="results" class="results hidden">
                 <h2>Результаты сканирования</h2>
-                <div id="resultsContent"></div>
+                
+                <div class="scan-info">
+                    <p><strong>Сайт:</strong> <span id="scanUrl"></span></p>
+                    <p><strong>Всего шрифтов:</strong> <span id="totalFonts"></span></p>
+                </div>
+
+                <!-- Кнопка экспорта и фильтры -->
+                <div class="export-container">
+                    <button onclick="exportToPDF()" class="btn-export">
+                        📄 Экспорт в PDF
+                    </button>
+                    
+                    <div class="filters">
+                        <span style="font-weight: 600;">Фильтры:</span>
+                        <label>
+                            <input type="checkbox" checked onchange="applyFilters()" data-status="OK">
+                            ✅ Свободные
+                        </label>
+                        <label>
+                            <input type="checkbox" checked onchange="applyFilters()" data-status="WARNING">
+                            ⚠️ Требуется проверка
+                        </label>
+                        <label>
+                            <input type="checkbox" checked onchange="applyFilters()" data-status="SYSTEM">
+                            ℹ️ Системные
+                        </label>
+                        <label>
+                            <input type="checkbox" checked onchange="applyFilters()" data-status="ERROR">
+                            ❌ Ошибки
+                        </label>
+                        <span class="font-counter" id="fontCounter"></span>
+                    </div>
+                </div>
+
+                <!-- Скроллируемая таблица -->
+                <div class="table-container">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Шрифт</th>
+                                <th>Статус</th>
+                                <th>Лицензия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             <div id="error" class="error hidden">
                 <p>Произошла ошибка при сканировании</p>
             </div>
         </main>
+    </div>
 
-        <footer>
-            <div class="disclaimer">
-                <strong>⚠️ Дисклеймер:</strong> Данный сервис не является юридической консультацией. 
-                Статус лицензии определяется автоматически на основе открытых баз и может содержать ошибки. 
-                Для окончательного подтверждения прав обратитесь к правообладателю.
-            </div>
-        </footer>
+    <!-- Закреплённый дисклеймер -->
+    <div class="disclaimer-fixed">
+        <strong>⚠️ Дисклеймер:</strong>
+        Данный сервис не является юридической консультацией. Статус лицензии определяется автоматически на основе открытых баз и может содержать ошибки. Для окончательного подтверждения прав обратитесь к правообладателю.
     </div>
 
     <script>
-        // Функция для извлечения названия шрифта из URL
+        let allFonts = []; // Храним все шрифты для фильтрации
+
         function extractFontNameFromUrl(url) {
+            if (!url) return 'Неизвестный';
             const filename = url.split('/').pop().split('?')[0];
             let name = filename.replace(/\.(woff2?|ttf|otf|eot)$/i, '');
             name = name.replace(/[-_]/g, ' ');
@@ -56,159 +104,140 @@
             return name.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ').trim() || 'Неизвестный';
         }
 
+        function applyFilters() {
+            // Получаем выбранные статусы
+            const checkedStatuses = [];
+            document.querySelectorAll('.filters input[type="checkbox"]:checked').forEach(cb => {
+                checkedStatuses.push(cb.getAttribute('data-status'));
+            });
+
+            // Фильтруем шрифты
+            const filteredFonts = allFonts.filter(font => checkedStatuses.includes(font.status));
+
+            // Обновляем таблицу
+            renderTable(filteredFonts);
+
+            // Обновляем счётчик
+            document.getElementById('fontCounter').textContent = 
+                `Показано: ${filteredFonts.length} из ${allFonts.length}`;
+        }
+
+        function renderTable(fonts) {
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+
+            fonts.forEach(font => {
+                const statusClass = {
+                    'OK': 'status-ok',
+                    'WARNING': 'status-warning',
+                    'SYSTEM': 'status-system',
+                    'ERROR': 'status-error'
+                }[font.status] || 'status-unknown';
+
+                const statusIcon = {
+                    'OK': '✅',
+                    'WARNING': '⚠️',
+                    'SYSTEM': 'ℹ️',
+                    'ERROR': '❌'
+                }[font.status] || '❓';
+
+                const statusText = {
+                    'OK': 'Свободная лицензия',
+                    'WARNING': 'Требуется проверка',
+                    'SYSTEM': 'Системный шрифт (легально)',
+                    'ERROR': 'Ошибка'
+                }[font.status] || font.status;
+
+                const fontName = font.matched_font || extractFontNameFromUrl(font.url) || 'Неизвестный';
+
+                let urlDisplay = '-';
+                if (font.url) {
+                    const urlText = font.url.length > 50 ? font.url.substring(0, 50) + '...' : font.url;
+                    urlDisplay = `<a href="${font.url}" target="_blank" title="${font.url}">${urlText}</a>`;
+                }
+
+                const row = `
+                    <tr class="${statusClass}">
+                        <td>${fontName}</td>
+                        <td>${statusIcon} ${statusText}</td>
+                        <td>${font.license_info || '-'}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+
         document.getElementById('scanForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const url = document.getElementById('url').value;
             const loading = document.getElementById('loading');
             const results = document.getElementById('results');
             const error = document.getElementById('error');
-            const resultsContent = document.getElementById('resultsContent');
-            
-            // Сброс
+
             loading.classList.remove('hidden');
             results.classList.add('hidden');
             error.classList.add('hidden');
-            resultsContent.innerHTML = '';
-            
+
             try {
-                console.log('🔍 Отправка запроса на:', url);
-                
                 const formData = new FormData();
                 formData.append('url', url);
-                
+
                 const response = await fetch('/scan', {
                     method: 'POST',
                     body: formData
                 });
-                
-                console.log('📥 Ответ сервера:', response.status, response.statusText);
-                
+
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error('❌ Ошибка HTTP:', errorText);
                     throw new Error(`HTTP ${response.status}: ${errorText}`);
                 }
-                
-                const contentType = response.headers.get('content-type');
-                console.log('📄 Content-Type:', contentType);
-                
-                if (!contentType || !contentType.includes('application/json')) {
-                    const text = await response.text();
-                    console.error('❌ Не JSON ответ:', text.substring(0, 500));
-                    throw new Error('Сервер вернул не JSON');
-                }
-                
+
                 const data = await response.json();
-                console.log('✅ Получены данные:', data);
-                
-                // Проверка на валидность данных
+
                 if (!data.fonts || !Array.isArray(data.fonts)) {
-                    console.error('❌ Неверный формат данных:', data);
                     throw new Error('Неверный формат ответа от сервера');
                 }
-                
-                // Отображение результатов
-                let html = `
-                    <div class="scan-info">
-                        <p><strong>Сайт:</strong> ${data.scan_url || url}</p>
-                        <p><strong>Всего шрифтов:</strong> ${data.total_fonts || data.fonts.length}</p>
-                    </div>
-                    <table class="results-table">
-                        <thead>
-                            <tr>
-                                <th>Шрифт</th>
-                                <th>Статус</th>
-                                <th>Лицензия</th>
-                                <th>URL</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                `;
-                
-                data.fonts.forEach(font => {
-                    const statusClass = {
-                        'OK': 'status-ok',
-                        'WARNING': 'status-warning',
-                        'SYSTEM': 'status-system',
-                        'ERROR': 'status-error'
-                    }[font.status] || 'status-unknown';
-                    
-                    const statusIcon = {
-                        'OK': '✅',
-                        'WARNING': '⚠️',
-                        'SYSTEM': 'ℹ️',
-                        'ERROR': '❌'
-                    }[font.status] || '❓';
-                    
-                    const statusText = {
-                        'OK': 'Свободная лицензия',
-                        'WARNING': 'Требуется проверка',
-                        'SYSTEM': 'Системный шрифт (легально)',
-                        'ERROR': 'Ошибка'
-                    }[font.status] || font.status;
-                    
-                    // Используем matched_font или извлекаем из URL
-                    const fontName = font.matched_font || extractFontNameFromUrl(font.url) || 'Неизвестный';
-                    
-                    // Добавляем визуальный индикатор для эвристического совпадения
-                    const matchBadge = font.match_method === 'fuzzy' 
-                        ? '<span style="font-size: 10px; background: #fff3cd; padding: 2px 6px; border-radius: 3px; margin-left: 5px;">по имени</span>' 
-                        : '';
-                    
-                    html += `
-                        <tr class="${statusClass}">
-                            <td>${fontName}${matchBadge}</td>
-                            <td>${statusIcon} ${statusText}</td>
-                            <td>${font.license_info || '-'}</td>
-                            <td><a href="${font.url}" target="_blank" title="${font.url}">${font.url.substring(0, 50)}${font.url.length > 50 ? '...' : ''}</a></td>
-                        </tr>
-                    `;
-                });
-                
-                html += '</tbody></table>';
-                
-                // Показываем предупреждения только если есть реальные ошибки
-                if (data.errors && data.errors.length > 0) {
-                    const criticalErrors = data.errors.filter(e => 
-                        e && 
-                        !e.toLowerCase().includes('timeout') && 
-                        !e.includes('403') &&
-                        !e.toLowerCase().includes('failed')
-                    );
-                    
-                    if (criticalErrors.length > 0) {
-                        html += `
-                            <div class="warnings">
-                                <strong>⚠️ Предупреждения:</strong>
-                                <ul>
-                                    ${criticalErrors.map(e => `<li>${e}</li>`).join('')}
-                                </ul>
-                            </div>
-                        `;
-                    }
-                }
-                
-                resultsContent.innerHTML = html;
+
+                // Сохраняем все шрифты
+                allFonts = data.fonts;
+
+                // Обновляем информацию
+                document.getElementById('scanUrl').textContent = data.scan_url || url;
+                document.getElementById('totalFonts').textContent = data.total_fonts || data.fonts.length;
+
+                // Рендерим таблицу
+                renderTable(allFonts);
+
+                // Обновляем счётчик
+                document.getElementById('fontCounter').textContent = `Показано: ${allFonts.length} из ${allFonts.length}`;
+
                 results.classList.remove('hidden');
-                console.log('✅ Результаты отображены');
-                
+
             } catch (err) {
-                console.error('💥 Критическая ошибка:', err);
+                console.error('Ошибка:', err);
                 error.innerHTML = `
                     <p><strong>❌ Произошла ошибка при сканировании</strong></p>
-                    <p style="font-size: 12px; color: #666; margin-top: 10px;">
-                        ${err.message}
-                    </p>
-                    <p style="font-size: 12px; color: #999;">
-                        Проверьте консоль браузера (F12) для деталей
-                    </p>
+                    <p style="font-size: 12px; color: #666; margin-top: 10px;">${err.message}</p>
                 `;
                 error.classList.remove('hidden');
             } finally {
                 loading.classList.add('hidden');
             }
         });
+
+        async function exportToPDF() {
+            const url = document.getElementById('url').value;
+            if (!url) {
+                alert('Сначала введите URL сайта для проверки');
+                return;
+            }
+
+            const encodedUrl = encodeURIComponent(url);
+            const pdfUrl = `/export/pdf?url=${encodedUrl}`;
+
+            window.open(pdfUrl, '_blank');
+        }
     </script>
 </body>
 </html>

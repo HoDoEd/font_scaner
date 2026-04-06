@@ -1,8 +1,9 @@
 import requests
 import re
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse, unquote, parse_qs
 from app.config import Config
+
 
 class FontCrawler:
     def __init__(self):
@@ -27,13 +28,11 @@ class FontCrawler:
         soup = BeautifulSoup(html, 'html.parser')
         css_urls = []
         
-        # <link rel="stylesheet" href="...">
         for link in soup.find_all('link', rel=lambda x: x and 'stylesheet' in x):
             href = link.get('href')
             if href:
                 css_urls.append(urljoin(base_url, href))
         
-        # <style>@import url("...")</style>
         for style in soup.find_all('style'):
             if style.string:
                 imports = re.findall(r'@import\s+url\(["\']?([^"\')]+)["\']?\)', style.string)
@@ -52,44 +51,173 @@ class FontCrawler:
             return ""
     
     def extract_font_name_from_url(self, font_url: str) -> str:
-        """Извлечь название шрифта из URL"""
-        # Получаем имя файла из URL
+        """Извлечь название шрифта из URL — улучшенная версия"""
+        if not font_url:
+            return "Неизвестный"
+        
         filename = unquote(font_url.split('/')[-1].split('?')[0])
         
         # Убираем расширение
         name = re.sub(r'\.(woff2?|ttf|otf|eot)$', '', filename, flags=re.IGNORECASE)
         
-        # Заменяем дефисы и подчёркивания на пробелы
-        name = re.sub(r'[-_]', ' ', name)
+        # Убираем cache-busting хеши: .cb123456, .abc123def и т.д.
+        name = re.sub(r'[-_]?(var|vf|variable|regular|bold|light|medium|thin|black|demo).*$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\.[a-f0-9]{6,}$', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'-[a-f0-9]{8,}$', '', name, flags=re.IGNORECASE)
+		
+        name = re.sub(r'\d+$', '', name)
+		
+        name = name.strip('-_').title()
+		
+        return name if name else "Неизвестный"
+
         
-        # Убираем технические суффиксы
-        name = re.sub(r'\s*(VF|Variable|Regular|Bold|Italic|Light|Medium|Thin|Black|White)\s*$', '', name, flags=re.IGNORECASE)
+        # Собираем название: сохраняем CamelCase для имён типа MonaSans
+        result = []
+        for part in clean_parts:
+            # Если часть уже в CamelCase (MonaSans) — оставляем как есть
+            if re.match(r'^[A-Z][a-z]+[A-Z]', part):
+                # Разбиваем CamelCase: MonaSans → Mona Sans
+                sub_parts = re.findall(r'[A-Z][a-z]*', part)
+                result.extend(sub_parts)
+            else:
+                # Обычное слово — капитулизируем
+                result.append(part.capitalize())
         
-        # Capitalize каждое слово
-        name = ' '.join(word.capitalize() for word in name.split())
+        return ' '.join(result).strip() or "Неизвестный"
+    
+    def parse_google_fonts_css(self, css_content: str, base_url: str) -> list:
+        """Парсит CSS от Google Fonts и извлекает ссылки на шрифты"""
+        fonts = []
+        font_face_pattern = r'@font-face\s*{([^}]+)}'
+        font_faces = re.findall(font_face_pattern, css_content, re.DOTALL)
         
-        return name.strip() if name else "Неизвестный"
+        for font_face in font_faces:
+            family_match = re.search(r"font-family\s*:\s*['\"]?([^'\";]+)['\"]?", font_face, re.IGNORECASE)
+            if not family_match:
+                continue
+            font_family = family_match.group(1).strip()
+            
+            src_match = re.search(r"url\(['\"]?([^)'\"]+\.(woff2?|ttf|otf))['\"]?\)", font_face, re.IGNORECASE)
+            if not src_match:
+                continue
+            
+            font_url = src_match.group(1).strip()
+            if not font_url.startswith('http'):
+                font_url = urljoin(base_url, font_url)
+            
+            fonts.append({"url": font_url, "name": font_family})
+        
+        return fonts
+    
+    def extract_fonts_from_font_family(self, css_content: str) -> list:
+        """
+        Извлекает названия шрифтов из font-family деклараций
+        Работает с минифицированным CSS
+        """
+        fonts_found = []
+        
+        # Системные/платформенные шрифты которые НЕ нужно проверять
+        system_fonts = {
+            '-apple-system', 'blinkmacsystemfont', 'system-ui',
+            'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy',
+            'ui-sans-serif', 'ui-serif', 'ui-monospace', 'ui-rounded',
+            'inherit', 'initial', 'unset', 'revert', 'emoji', 'math',
+            'arial', 'helvetica', 'times new roman', 'times', 'georgia',
+            'verdana', 'tahoma', 'trebuchet ms', 'courier new', 'courier',
+            'impact', 'comic sans ms', 'palatino', 'garamond', 'bookman',
+            'avant garde', 'helvetica neue'
+        }
+		
+		# Технические суффиксы для удаления
+        tech_suffixes = ['-var', '-vf', '-variable', '-regular', '-bold', '-light', '-medium']
+		
+        # Ищем все вхождения font-family:
+        for match in re.finditer(r'font-family\s*:\s*([^;}\n]+)', css_content, re.IGNORECASE):
+            value = match.group(1).strip()
+            
+            # Разбиваем по запятой, корректно обрабатывая кавычки
+            font_list = []
+            current = ""
+            in_quotes = False
+            quote_char = None
+            
+            for char in value:
+                if char in '"\'':
+                    if not in_quotes:
+                        in_quotes = True
+                        quote_char = char
+                    elif char == quote_char:
+                        in_quotes = False
+                        quote_char = None
+                    current += char
+                elif char == ',' and not in_quotes:
+                    if current.strip():
+                        font_list.append(current.strip().strip('"\''))
+                    current = ""
+                else:
+                    current += char
+            
+            if current.strip():
+                font_list.append(current.strip().strip('"\''))
+            
+            # Обрабатываем каждый шрифт
+            for font_name in font_list:
+                if not font_name or len(font_name) < 2:
+                    continue
+                
+                # Пропускаем системные (регистронезависимо)
+                if font_name.lower() in system_fonts:
+                    continue
+				
+				# Убираем технические суффиксы (sohne-var → sohne)
+                for suffix in tech_suffixes:
+                    if font_name.lower().endswith(suffix):
+                        font_name = font_name[:-len(suffix)]
+                        font_name = re.sub(r'[-_]?(var|vf|regular|bold|light|medium).*$', '', font_name, flags=re.IGNORECASE)
+                        font_name = re.sub(r'\d+$', '', font_name)  # Убираем цифры в конце
+                        break
+                
+                # Пропускаем CSS-переменные
+                if font_name.startswith('var('):
+                    continue
+					
+				# Пропускаем слишком короткие после очистки
+                if len(font_name) < 2:
+                    continue
+                
+                # Добавляем если ещё не добавляли
+                if font_name not in [f["name"] for f in fonts_found]:
+                    fonts_found.append({
+                        "name": font_name,
+                        "source": "font_family_declaration",
+                        "url": None
+                    })
+        
+        return fonts_found
     
     def extract_font_urls(self, css_content: str, base_url: str) -> list:
         """Извлечь URL шрифтов из CSS"""
         font_urls = []
         
-        # @font-face { src: url(...) }
+        # Проверка: это Google Fonts CSS?
+        if 'fonts.googleapis.com' in base_url or 'fonts.gstatic.com' in base_url:
+            google_fonts = self.parse_google_fonts_css(css_content, base_url)
+            return google_fonts
+        
+        # 1. Обычный парсинг @font-face
         pattern = r'@font-face[^}]*src:[^}]*url\(["\']?([^"\')]+\.(woff2?|ttf|otf|eot))["\']?'
         matches = re.findall(pattern, css_content, re.IGNORECASE | re.DOTALL)
         
         for match in matches:
             font_url = match[0]
-            # Пропускаем Base64
             if font_url.startswith('data:'):
                 continue
             
             full_url = urljoin(base_url, font_url)
-            
-            # Пытаемся извлечь название шрифта из CSS
             font_name = "Неизвестный"
             
-            # Ищем font-family вблизи этого @font-face
+            # Ищем font-family в том же @font-face блоке
             font_face_pattern = r'@font-face\s*{([^}]+)}'
             font_faces = re.findall(font_face_pattern, css_content, re.IGNORECASE | re.DOTALL)
             
@@ -100,16 +228,37 @@ class FontCrawler:
                         font_name = family_match.group(1).strip().strip('"\'')
                         break
             
-            # Если не нашли в CSS, пробуем извлечь из URL
             if font_name == "Неизвестный":
                 font_name = self.extract_font_name_from_url(full_url)
             
-            font_urls.append({
-                "url": full_url,
-                "name": font_name
-            })
+            font_urls.append({"url": full_url, "name": font_name})
+        
+        # 2. Извлекаем шрифты из font-family деклараций
+        font_family_fonts = self.extract_fonts_from_font_family(css_content)
+        for ff_font in font_family_fonts:
+            # Добавляем только если нет дубликатов по имени
+            if ff_font["name"] not in [f["name"] for f in font_urls]:
+                font_urls.append(ff_font)
         
         return font_urls[:Config.MAX_FONTS_PER_SITE]
+    
+    def extract_google_fonts_from_link(self, href: str) -> list:
+        """Извлекает названия шрифтов из ссылки Google Fonts"""
+        fonts = []
+        if 'fonts.googleapis.com' not in href:
+            return fonts
+        
+        try:
+            parsed = urlparse(href)
+            params = parse_qs(parsed.query)
+            families = params.get('family', [])
+            for family_param in families:
+                font_name = family_param.split(':')[0].split('+')[0].replace('+', ' ')
+                if font_name:
+                    fonts.append({"name": font_name, "source": "google_fonts_link"})
+        except:
+            pass
+        return fonts
     
     def download_font(self, url: str) -> bytes:
         """Скачать файл шрифта"""
@@ -124,19 +273,17 @@ class FontCrawler:
         """Извлечь системные шрифты из CSS"""
         soup = BeautifulSoup(html, 'html.parser')
         system_fonts = []
-        system_font_names = ['arial', 'times new roman', 'georgia', 'verdana', 'trebuchet', 'courier new', 'helvetica', 'tahoma']
+        system_font_names = ['-apple-system', 'blinkmacsystemfont', 'system-ui', 'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy']
         
-        # Ищем font-family в стилях
         for style in soup.find_all(['style', 'link']):
             if style.name == 'style' and style.string:
                 matches = re.findall(r'font-family\s*:\s*["\']?([^"\';]+)["\']?', style.string, re.IGNORECASE)
                 for match in matches:
                     for font in match.split(','):
                         font = font.strip().strip('"\'').lower()
-                        if any(sf in font for sf in system_font_names):
+                        if font in system_font_names:
                             if font not in system_fonts:
                                 system_fonts.append(font)
-        
         return system_fonts
     
     def scan_site(self, url: str) -> dict:
@@ -145,36 +292,41 @@ class FontCrawler:
             "url": url,
             "font_files": [],
             "system_fonts": [],
+            "google_fonts_names": [],
             "errors": []
         }
         
         try:
-            # Скачиваем главную страницу
             html = self.fetch_page(url)
-            
-            # Извлекаем системные шрифты
             result["system_fonts"] = self.extract_system_fonts(html)
-            
-            # Извлекаем CSS
             css_urls = self.extract_css_urls(html, url)
             
-            # Из каждого CSS извлекаем шрифты
             for css_url in css_urls:
+                if 'fonts.googleapis.com' in css_url:
+                    gf_names = self.extract_google_fonts_from_link(css_url)
+                    result["google_fonts_names"].extend(gf_names)
+                
                 css_content = self.fetch_css(css_url)
                 font_urls = self.extract_font_urls(css_content, css_url)
+                
                 for font_info in font_urls:
-                    if font_info["url"] not in [f["url"] for f in result["font_files"]]:
+                    is_duplicate = False
+                    for existing in result["font_files"]:
+                        if existing["url"] == font_info["url"] or (font_info["url"] is None and existing["name"] == font_info["name"]):
+                            is_duplicate = True
+                            break
+                    
+                    if not is_duplicate:
                         result["font_files"].append({
                             "url": font_info["url"],
                             "name": font_info["name"],
                             "source_css": css_url
                         })
             
-            # Также ищем прямые ссылки на шрифты в HTML
             soup = BeautifulSoup(html, 'html.parser')
             for link in soup.find_all(href=re.compile(r'\.(woff2?)$', re.I)):
                 font_url = urljoin(url, link.get('href'))
-                if font_url not in [f["url"] for f in result["font_files"]]:
+                if font_url not in [f["url"] for f in result["font_files"] if f["url"]]:
                     font_name = self.extract_font_name_from_url(font_url)
                     result["font_files"].append({
                         "url": font_url,
